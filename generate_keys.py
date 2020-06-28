@@ -157,7 +157,7 @@ def parallel_extract_citations_ids_keys(doc_id):
 
     citations_keys = extract_citations_ids_keys(doc, standardizer)
     if citations_keys:
-        return ((doc.publisher_id, citations_keys))
+        return (('-'.join([doc.publisher_id, doc.collection_acronym]), citations_keys))
 
 
 print('[1] Getting documents\' ids...')
