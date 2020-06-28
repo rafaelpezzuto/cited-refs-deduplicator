@@ -3,6 +3,7 @@ import requests
 import sys
 import time
 
+from hashlib import sha3_256
 from multiprocessing import Pool
 from pymongo import MongoClient
 from utils.string_processor import preprocess_author_name, preprocess_journal_title
@@ -82,7 +83,7 @@ def _extract_citation_key(citation: Citation, cit_full_id: str, cit_standardized
         data['cleaned_first_page'] = cleaned_first_page
 
     if cleaned_first_author and cleaned_first_page and cleaned_issue and cleaned_volume and cleaned_title and cleaned_journal_title:
-        return '-'.join([data[k] for k in sorted(data)]).strip()
+        return data
 
 
 def _mount_citation_id(citation: Citation, collection_acronym):
@@ -100,9 +101,10 @@ def extract_citations_ids_keys(document: Article, standardizer):
 
             cit_standardizerd_data = standardizer.find_one({'_id': cit_full_id})
 
-            cit_key = _extract_citation_key(cit, cit_full_id, cit_standardizerd_data)
-            if cit_key:
-                citations_ids_keys.append((cit_full_id, cit_key))
+            cit_keys = _extract_citation_key(cit, cit_full_id, cit_standardizerd_data)
+            if cit_keys:
+                cit_sha3_256 = sha3_256('-'.join([cit_keys[k] for k in sorted(cit_keys)]).strip().encode()).hexdigest()
+                citations_ids_keys.append((cit_full_id, cit_keys, cit_sha3_256))
 
     return citations_ids_keys
 
@@ -112,13 +114,15 @@ def convert_to_mongodoc(data):
     for doc_id, citations_data in [d for d in data if d]:
         for cit in citations_data:
             cit_full_id = cit[0]
-            cit_key = cit[1]
+            cit_keys = cit[1]
+            cit_sha3_256 = cit[2]
 
-            if cit_key not in mgdocs:
-                mgdocs[cit_key] = {'cit_full_ids': [], 'citing_docs': []}
+            if cit_sha3_256 not in mgdocs:
+                mgdocs[cit_sha3_256] = {'cit_full_ids': [], 'citing_docs': [], 'cit_keys': cit_keys}
 
-            mgdocs[cit_key]['cit_full_ids'].append(cit_full_id)
-            mgdocs[cit_key]['citing_docs'].append(doc_id)
+            mgdocs[cit_sha3_256]['cit_full_ids'].append(cit_full_id)
+            mgdocs[cit_sha3_256]['citing_docs'].append(doc_id)
+
     return mgdocs
 
 
@@ -127,15 +131,17 @@ def save_data_to_mongo(data):
     mongo_data = convert_to_mongodoc(data)
 
     mdb = MongoClient()
-    writer = mdb['citations']['dedup-keys']
+    writer = mdb['citations']['deduplicated']
     
-    for cit_key in mongo_data:
-        new_doc = mongo_data[cit_key]    
+    for cit_sha3_256 in mongo_data:
+        new_doc = mongo_data[cit_sha3_256]    
         writer.update_one(
-            filter={'_id': str(cit_key)},
-            update={'$addToSet': {
-                'cit_full_ids': {'$each': new_doc['cit_full_ids']},
-                'citing_docs': {'$each': new_doc['citing_docs']}}},
+            filter={'_id': str(cit_sha3_256)},
+            update={
+                '$set': new_doc['cit_keys'],
+                '$addToSet': {
+                    'cit_full_ids': {'$each': new_doc['cit_full_ids']},
+                    'citing_docs': {'$each': new_doc['citing_docs']}}},
             upsert=True)
 
     mdb.close()
