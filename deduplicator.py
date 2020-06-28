@@ -23,7 +23,7 @@ def _get_cleaned_first_author_name(first_author: dict):
         if fa_givennames:
             initial = fa_givennames[0]
         
-        cleaned_first_author_name = ' '.join([initial, lastname])
+        cleaned_first_author_name = ' '.join([initial, lastname]).strip()
 
         if cleaned_first_author_name:
             return cleaned_first_author_name.lower()
@@ -123,6 +123,7 @@ def convert_to_mongodoc(data):
 
 
 def save_data_to_mongo(data):
+    # TODO: remove hardcoded MongoConnection
     mongo_data = convert_to_mongodoc(data)
 
     mdb = MongoClient()
@@ -156,6 +157,7 @@ def parallel_extract_citations_ids_keys(doc_id):
 print('[1] Getting documents\' ids...')
 start = time.time()
 
+# TODO: remove hardcoded MongoConnection
 main_client = MongoClient(maxPoolSize=None)
 docs_ids = [x['_id'] for x in main_client['ami']['articles-issues'].find({}, {'_id': 1})]
 total_docs = len(docs_ids)
@@ -165,6 +167,7 @@ end = time.time()
 print('\tDone after %.2f seconds' % (end - start))
 
 start = time.time()
+# TODO: remove hardcoded interval
 interval = 2000
 print('[2] Generating keys...')
 chunks = range(0, total_docs, interval)
@@ -174,6 +177,7 @@ for slice_start in chunks:
         slice_end = total_docs
 
     print('\t%d to %d' % (slice_start, slice_end))
+    # TODO: remove hardcoded number of Threads
     with Pool(12) as p:
         results = p.map(parallel_extract_citations_ids_keys, docs_ids[slice_start:slice_end])
 
