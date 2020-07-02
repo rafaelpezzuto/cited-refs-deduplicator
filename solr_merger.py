@@ -21,7 +21,7 @@ def merge_citations(solr, deduplicated_citations):
 
         query = 'id:(%s)' % ' OR '.join(cit_full_ids)
 
-        response = solr.select({'q': query})
+        response = solr.select({'q': query, 'rows': 10000})
         dic = eval(response)
 
         ids_to_remove = set()
@@ -35,6 +35,7 @@ def merge_citations(solr, deduplicated_citations):
                 raw_d = d.copy()
                 merged_citation['document_fk'].extend(raw_d['document_fk'])
                 merged_citation['document_fk'] = list(set(merged_citation['document_fk']))
+                merged_citation['total_received'] = str(len(merged_citation['document_fk']))
 
                 merged_citation['in'].extend(d['in'])
                 merged_citation['in'] = list(set(merged_citation['in']))
@@ -60,10 +61,11 @@ def merge_citations(solr, deduplicated_citations):
                         'doc': merged_citation,
                     }
                 }
+                logging.warning('Adding id %s' % merged_citation['id'])
                 solr.update(str(solr_doc).encode('utf-8'), {'content-type': 'application/json'})
 
             for i in ids_to_remove:
-                logging.info('Removing id %s' % i)
+                logging.warning('Removing id %s' % i)
                 solr.delete('id:{}'.format(i))
 
             query = 'id:(%s)' % ' OR '.join(citing_docs)
@@ -71,10 +73,11 @@ def merge_citations(solr, deduplicated_citations):
             dic = eval(response)
 
             for d in dic['response']['docs']:
-                logging.info('Updating id %s' % d['id'])
+                logging.warning('Updating id %s' % d['id'])
                 updated_doc = {}
+                updated_doc['entity'] = 'document'
                 updated_doc['id'] = d['id']
-                updated_doc['citation_fk'] = {'remove': ids_to_remove, 'add': merged_citation['id']}
+                updated_doc['citation_fk'] = {'remove': list(ids_to_remove), 'add': merged_citation['id']}
 
                 solr_doc = {
                     'add': {
@@ -88,8 +91,8 @@ def merge_citations(solr, deduplicated_citations):
 def get_deduplicated_citations():
     deduplicated_citations = []
 
-    logging.info('Collecting deduplicated citations...')
-    for i in DEDUPLICATED_CIT_DB.find({}):
+    logging.warning('Collecting deduplicated citations...')
+    for i in DEDUPLICATED_CIT_DB.find():
         if len(i['cit_full_ids']) > 1:
             dc = {
                 'key': i['_id'],
@@ -97,13 +100,13 @@ def get_deduplicated_citations():
                 'citing_docs': i['citing_docs']}
             deduplicated_citations.append(dc)
     
-    logging.info('There are %d deduplicated citations' % len(deduplicated_citations))
+    logging.warning('There are %d deduplicated citations' % len(deduplicated_citations))
 
-    return deduplicated_citations[16:17]
+    return deduplicated_citations
 
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.WARN)
 
     solr = SolrAPI.Solr(SOLR_URL)
     
