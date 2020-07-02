@@ -56,7 +56,8 @@ def _extract_citation_key(citation: Citation, cit_full_id: str, cit_standardized
     }
 
     if cit_standardized_data:
-        data['cleaned_journal_title'] = cit_standardized_data['cit_official_journal_title'].lower()
+        cleaned_journal_title = cit_standardized_data['cit_official_journal_title'].lower()
+        data['cleaned_journal_title'] = cleaned_journal_title
     else:
         cleaned_journal_title = preprocess_journal_title(citation.source).lower()
         if cleaned_journal_title:
