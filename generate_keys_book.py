@@ -124,7 +124,7 @@ def save_data_to_mongo(data):
 
     for k, v in mongo_data.items():
         mdb = MongoClient()
-        writer = mdb['citations']['dt2-' + k]
+        writer = mdb['citations']['dt3-' + k]
 
         for cit_sha3_256 in v:
             new_doc = v[cit_sha3_256]
@@ -159,7 +159,7 @@ start = time.time()
 
 # TODO: remove hardcoded MongoConnection
 main_client = MongoClient(maxPoolSize=None)
-docs_ids = [x['_id'] for x in main_client['ami']['articles-issues'].find({}, {'_id': 1}).limit(10000)]
+docs_ids = [x['_id'] for x in main_client['ami']['articles-issues'].find({}, {'_id': 1})]
 total_docs = len(docs_ids)
 main_client.close()
 
