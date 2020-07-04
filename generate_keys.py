@@ -1,96 +1,91 @@
-import json
-import requests
-import sys
 import time
 
 from hashlib import sha3_256
 from multiprocessing import Pool
 from pymongo import MongoClient
+from utils.field_cleaner import get_cleaned_publication_year, get_cleaned_first_author_name, get_cleaned_volume, get_cleaned_issue, get_cleaned_first_page
 from utils.string_processor import preprocess_author_name, preprocess_journal_title
 from xylose.scielodocument import Article, Citation
 
 
-def _get_cleaned_first_author_name(first_author: dict):
-    if first_author:
-        initial = ''
-        lastname = ''
-
-        fa_surname = preprocess_author_name(first_author.get('surname', ''))
-        fa_givennames = preprocess_author_name(first_author.get('given_names', ''))
-
-        if fa_surname:
-            lastname = fa_surname.split(' ')[-1]
-        
-        if fa_givennames:
-            initial = fa_givennames[0]
-        
-        cleaned_first_author_name = ' '.join([initial, lastname]).strip()
-
-        if cleaned_first_author_name:
-            return cleaned_first_author_name.lower()
-
-
-def _get_cleaned_volume(volume: str):
-    if volume:
-        return preprocess_author_name(volume).lower()
-
-
-def _get_cleaned_issue(issue: str):
-    if issue:
-        return preprocess_author_name(issue).lower()
-
-
-def _get_cleaned_first_page(first_page: str):
-    if first_page:
-        return preprocess_author_name(first_page).lower()
-
-
-def _extract_citation_key(citation: Citation, cit_full_id: str, cit_standardized_data):
+def _extract_citation_key(citation: Citation, cit_standardized_data):
     data = {
-        'cleaned_first_author': '',
         'cleaned_title': '',
+        'cleaned_publication_year': '',
+        'cleaned_first_author': '',
         'cleaned_journal_title': '',
         'cleaned_volume': '',
         'cleaned_issue': '',
         'cleaned_first_page': ''
     }
 
+    cleaned_journal_title = ''
+
     if cit_standardized_data:
-        cleaned_journal_title = cit_standardized_data['cit_official_journal_title'].lower()
-        data['cleaned_journal_title'] = cleaned_journal_title
-    else:
+        cleaned_journal_title = cit_standardized_data['official-journal-title'][0].lower()
+        if cleaned_journal_title:
+            data['cleaned_journal_title'] = cleaned_journal_title
+
+    if not cleaned_journal_title:
         cleaned_journal_title = preprocess_journal_title(citation.source).lower()
         if cleaned_journal_title:
             data['cleaned_journal_title'] = cleaned_journal_title
+
+    cleaned_publication_year = get_cleaned_publication_year(citation.publication_date)
+    if cleaned_publication_year:
+        data['cleaned_publication_year'] = cleaned_publication_year
 
     cleaned_title = preprocess_author_name(citation.title()).lower()
     if cleaned_title:
         data['cleaned_title'] = cleaned_title
 
-    cleaned_first_author = _get_cleaned_first_author_name(citation.first_author)
+    cleaned_first_author = get_cleaned_first_author_name(citation.first_author)
     if cleaned_first_author:
         data['cleaned_first_author'] = cleaned_first_author
 
-    cleaned_volume = _get_cleaned_volume(citation.volume)
+    cleaned_volume = get_cleaned_volume(citation.volume)
     if cleaned_volume:
         data['cleaned_volume'] = cleaned_volume
 
-    cleaned_issue = _get_cleaned_issue(citation.issue)
+    cleaned_issue = get_cleaned_issue(citation.issue)
     if cleaned_issue:
         data['cleaned_issue'] = cleaned_issue
 
-    cleaned_first_page = _get_cleaned_first_page(citation.start_page)
+    cleaned_first_page = get_cleaned_first_page(citation.start_page)
     if cleaned_first_page:
         data['cleaned_first_page'] = cleaned_first_page
 
-    if cleaned_first_author and cleaned_first_page and cleaned_issue and cleaned_volume and cleaned_title and cleaned_journal_title:
-        return data
+    return data
 
 
 def _mount_citation_id(citation: Citation, collection_acronym):
     cit_id = citation.data['v880'][0]['_']
     cit_full_id = '{0}-{1}'.format(cit_id, collection_acronym)
     return cit_full_id
+
+
+def _generate_hashes(cit_keys):
+    t = cit_keys.get('cleaned_title')
+    py = cit_keys.get('cleaned_publication_year')
+    j = cit_keys.get('cleaned_journal_title')
+    fau = cit_keys.get('cleaned_first_author')
+    fp = cit_keys.get('cleaned_first_page')
+    i = cit_keys.get('cleaned_issue')
+    v = cit_keys.get('cleaned_volume')
+
+    t_py_j_fau_v = ''
+    t_py_j_fau_fp = ''
+    t_py_j_fau_i = ''
+
+    if t and py and j and fau:
+        if v:
+            t_py_j_fau_v = sha3_256(''.join(['TITLE' + t, 'YEAR' + py, 'JOURNAL' + j, 'FIRST_AUTHOR' + fau, 'VOLUME' + v]).encode()).hexdigest()
+        if fp:
+            t_py_j_fau_fp = sha3_256(''.join(['TITLE' + t, 'YEAR' + py, 'JOURNAL' + j, 'FIRST_AUTHOR' + fau, 'FIRST_PAGE' + fp]).encode()).hexdigest()
+        if i:
+            t_py_j_fau_i = sha3_256(''.join(['TITLE' + t, 'YEAR' + py, 'JOURNAL' + j, 'FIRST_AUTHOR' + fau, 'ISSUE' + i]).encode()).hexdigest()
+
+    return t_py_j_fau_v, t_py_j_fau_fp, t_py_j_fau_i
 
 
 def extract_citations_ids_keys(document: Article, standardizer):
@@ -100,29 +95,40 @@ def extract_citations_ids_keys(document: Article, standardizer):
         for cit in [c for c in document.citations if c.publication_type == 'article']:
             cit_full_id = _mount_citation_id(cit, document.collection_acronym)
 
-            cit_standardizerd_data = standardizer.find_one({'_id': cit_full_id})
+            cit_standardized_data = standardizer.find_one({'_id': cit_full_id, 'status': {'$gt': 0}})
+            cit_keys = _extract_citation_key(cit, cit_standardized_data)
+            hv, hfp, hi = _generate_hashes(cit_keys)
 
-            cit_keys = _extract_citation_key(cit, cit_full_id, cit_standardizerd_data)
-            if cit_keys:
-                cit_sha3_256 = sha3_256('-'.join([cit_keys[k] for k in sorted(cit_keys)]).strip().encode()).hexdigest()
-                citations_ids_keys.append((cit_full_id, cit_keys, cit_sha3_256))
+            if hv:
+                citations_ids_keys.append((cit_full_id, cit_keys, hv, 'vol'))
+            if hfp:
+                citations_ids_keys.append((cit_full_id, cit_keys, hfp, 'fp'))
+            if hi:
+                citations_ids_keys.append((cit_full_id, cit_keys, hi, 'issue'))
 
     return citations_ids_keys
 
 
 def convert_to_mongodoc(data):
-    mgdocs = {}
+    mgdocs = {'vol': {}, 'fp': {}, 'issue': {}}
     for doc_id, citations_data in [d for d in data if d]:
         for cit in citations_data:
             cit_full_id = cit[0]
             cit_keys = cit[1]
             cit_sha3_256 = cit[2]
+            cit_hash_mode = cit[3]
 
             if cit_sha3_256 not in mgdocs:
-                mgdocs[cit_sha3_256] = {'cit_full_ids': [], 'citing_docs': [], 'cit_keys': cit_keys}
+                mgdocs[cit_hash_mode][cit_sha3_256] = {'cit_full_ids': [], 'citing_docs': [], 'vol': [], 'fp': [], 'issue': [], 'cit_keys': {}}
 
-            mgdocs[cit_sha3_256]['cit_full_ids'].append(cit_full_id)
-            mgdocs[cit_sha3_256]['citing_docs'].append(doc_id)
+            mgdocs[cit_hash_mode][cit_sha3_256]['vol'].append(cit_keys.get('cleaned_volume'))
+            mgdocs[cit_hash_mode][cit_sha3_256]['fp'].append(cit_keys.get('cleaned_first_page'))
+            mgdocs[cit_hash_mode][cit_sha3_256]['issue'].append(cit_keys.get('cleaned_issue'))
+            mgdocs[cit_hash_mode][cit_sha3_256]['cit_full_ids'].append(cit_full_id)
+            mgdocs[cit_hash_mode][cit_sha3_256]['citing_docs'].append(doc_id)
+
+            for k in ['cleaned_title', 'cleaned_publication_year', 'cleaned_first_author', 'cleaned_journal_title']:
+                mgdocs[cit_hash_mode][cit_sha3_256]['cit_keys'][k] = cit_keys[k]
 
     return mgdocs
 
@@ -131,27 +137,33 @@ def save_data_to_mongo(data):
     # TODO: remove hardcoded MongoConnection
     mongo_data = convert_to_mongodoc(data)
 
-    mdb = MongoClient()
-    writer = mdb['citations']['deduplicated']
-    
-    for cit_sha3_256 in mongo_data:
-        new_doc = mongo_data[cit_sha3_256]    
-        writer.update_one(
-            filter={'_id': str(cit_sha3_256)},
-            update={
-                '$set': new_doc['cit_keys'],
-                '$addToSet': {
-                    'cit_full_ids': {'$each': new_doc['cit_full_ids']},
-                    'citing_docs': {'$each': new_doc['citing_docs']}}},
-            upsert=True)
+    for k, v in mongo_data.items():
+        mdb = MongoClient()
+        writer = mdb['citations']['dt2-' + k]
 
-    mdb.close()
+        for cit_sha3_256 in v:
+            new_doc = v[cit_sha3_256]
+            writer.update_one(
+                filter={'_id': str(cit_sha3_256)},
+                update={
+                    '$set': {'cit_keys': new_doc['cit_keys']},
+                    '$addToSet': {
+                        'cit_full_ids': {'$each': new_doc['cit_full_ids']},
+                        'citing_docs': {'$each': new_doc['citing_docs']},
+                        'cit_vol': {'$each': new_doc['vol']},
+                        'cit_issue': {'$each': new_doc['issue']},
+                        'cit_first_page': {'$each': new_doc['fp']}
+                    }
+                },
+                upsert=True)
+
+        mdb.close()
 
 
 def parallel_extract_citations_ids_keys(doc_id):
     client = MongoClient(maxPoolSize=None)
     articles = client['ami']['articles-issues']
-    standardizer = client['citation']['standardizer']
+    standardizer = client['citations']['standardized']
 
     raw = articles.find_one({'_id': doc_id})
     doc = Article(raw)
