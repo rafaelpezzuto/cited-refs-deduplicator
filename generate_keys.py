@@ -121,9 +121,15 @@ def convert_to_mongodoc(data):
             if cit_sha3_256 not in mgdocs:
                 mgdocs[cit_hash_mode][cit_sha3_256] = {'cit_full_ids': [], 'citing_docs': [], 'vol': [], 'fp': [], 'issue': [], 'cit_keys': {}}
 
-            mgdocs[cit_hash_mode][cit_sha3_256]['vol'].append(cit_keys.get('cleaned_volume'))
-            mgdocs[cit_hash_mode][cit_sha3_256]['fp'].append(cit_keys.get('cleaned_first_page'))
-            mgdocs[cit_hash_mode][cit_sha3_256]['issue'].append(cit_keys.get('cleaned_issue'))
+            if cit_keys.get('cleaned_volume'):
+                mgdocs[cit_hash_mode][cit_sha3_256]['vol'].append(cit_keys.get('cleaned_volume'))
+
+            if cit_keys.get('cleaned_first_page'):
+                mgdocs[cit_hash_mode][cit_sha3_256]['fp'].append(cit_keys.get('cleaned_first_page'))
+
+            if cit_keys.get('cleaned_issue'):
+                mgdocs[cit_hash_mode][cit_sha3_256]['issue'].append(cit_keys.get('cleaned_issue'))
+
             mgdocs[cit_hash_mode][cit_sha3_256]['cit_full_ids'].append(cit_full_id)
             mgdocs[cit_hash_mode][cit_sha3_256]['citing_docs'].append(doc_id)
 
@@ -139,7 +145,7 @@ def save_data_to_mongo(data):
 
     for k, v in mongo_data.items():
         mdb = MongoClient()
-        writer = mdb['citations']['dt2-' + k]
+        writer = mdb['citations']['dt3-' + k]
 
         for cit_sha3_256 in v:
             new_doc = v[cit_sha3_256]
