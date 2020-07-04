@@ -1,23 +1,25 @@
+import datetime
 import logging
 import SolrAPI
-
 
 from pymongo import MongoClient
 
 
 SOLR_URL='http://localhost:8983/solr/articles'
-DEDUPLICATED_CIT_DB=MongoClient()['citations']['deduplicated']
+MONGO_DB=MongoClient()['citations']
 
 
-def merge_citations(solr, deduplicated_citations):
+def merge_citations(solr, deduplicated_citations, base):
     logging.info('Merging Solr documents...')
+    counter = 1
+    for dc in deduplicated_citations:
+        print('\r%d' % counter, end='')
+        counter += 1
+        key = dc['_id']
+        cit_full_ids = dc['cit_full_ids']
+        citing_docs = dc['citing_docs']
 
-    for i in deduplicated_citations:
-        key = i['key']
-        cit_full_ids = i['cit_full_ids']
-        citing_docs = i['citing_docs']
-
-        logging.info('Merging data from %s,%s,%s' % (key, cit_full_ids, citing_docs))
+        logging.info('Merging data for ID %s (CIT %s) (ART %s)' % (key, '#'.join(cit_full_ids), '#'.join(citing_docs)))
 
         query = 'id:(%s)' % ' OR '.join(cit_full_ids)
 
@@ -28,8 +30,14 @@ def merge_citations(solr, deduplicated_citations):
         merged_citation = {}
 
         if len(dic['response']['docs']) > 1:
-            
+
             merged_citation.update(dic['response']['docs'][0])
+            if base == 'dt3-fp':
+                merged_citation['start_page'] = dc['cit_first_page']
+            elif base == 'dt3-vol':
+                merged_citation['volume'] = dc['cit_vol']
+            elif base == 'dt3-issue':
+                merged_citation['issue'] = dc['cit_issue']
 
             for d in dic['response']['docs'][1:]:
                 raw_d = d.copy()
@@ -55,25 +63,26 @@ def merge_citations(solr, deduplicated_citations):
                 ids_to_remove.add(d['id'])
 
             if merged_citation:
-                logging.info('Adding id %s' % merged_citation['id'])
+                logging.debug('Adding id %s' % merged_citation['id'])
                 solr_doc = {
                     'add': {
                         'doc': merged_citation,
                     }
                 }
-                logging.warning('Adding id %s' % merged_citation['id'])
+                logging.debug('Adding id %s' % merged_citation['id'])
                 solr.update(str(solr_doc).encode('utf-8'), {'content-type': 'application/json'})
 
             for i in ids_to_remove:
-                logging.warning('Removing id %s' % i)
+                logging.debug('Removing id %s' % i)
                 solr.delete('id:{}'.format(i))
 
             query = 'id:(%s)' % ' OR '.join(citing_docs)
             response = solr.select({'q': query})
             dic = eval(response)
 
+            docs_to_be_updated = []
             for d in dic['response']['docs']:
-                logging.warning('Updating id %s' % d['id'])
+                logging.debug('Updating id %s' % d['id'])
                 updated_doc = {}
                 updated_doc['entity'] = 'document'
                 updated_doc['id'] = d['id']
@@ -85,36 +94,46 @@ def merge_citations(solr, deduplicated_citations):
                     }
                 }
 
-                solr.update(str(solr_doc).encode('utf-8'), headers={'content-type': 'application/json'})
+                docs_to_be_updated.append(str(solr_doc).encode('utf-8'))
+
+            solr.update(str(docs_to_be_updated), headers={'content-type': 'application/json'})
 
 
-def get_deduplicated_citations():
+def get_deduplicated_citations(db):
     deduplicated_citations = []
 
-    logging.warning('Collecting deduplicated citations...')
-    for i in DEDUPLICATED_CIT_DB.find():
+    logging.info('Collecting deduplicated pairs from %s...' % db)
+    for x, i in enumerate(MONGO_DB[db].find()):
+        print('\r%s %d' % (db, x + 1), end='')
         if len(i['cit_full_ids']) > 1:
             dc = {
-                'key': i['_id'],
+                '_id': i['_id'],
                 'cit_full_ids': i['cit_full_ids'],
                 'citing_docs': i['citing_docs']}
-            deduplicated_citations.append(dc)
-    
-    logging.warning('There are %d deduplicated citations' % len(deduplicated_citations))
 
+            if i == 'dt3-fp':
+                dc.update({'cit_first_page': i['cit_first_page']})
+            if i == 'dt3-vol':
+                dc.update({'cit_vol': i['cit_vol']})
+            if i == 'dt3-issue':
+                dc.update({'cit_issue': i['cit_issue']})
+
+            deduplicated_citations.append(dc)
+    print()
+    logging.info('There are %d citations to be deduplicated' % len(deduplicated_citations))
     return deduplicated_citations
 
 
 def main():
-    logging.basicConfig(level=logging.WARN)
+    logging.basicConfig(filename='solr-merger-' + datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S') + '.log', level=logging.DEBUG)
 
     solr = SolrAPI.Solr(SOLR_URL)
-    
-    dup_cits = get_deduplicated_citations()
 
-    merge_citations(solr, dup_cits)
-   
-    solr.commit()
+    for base in ['dt3-fp', 'dt3-vol', 'dt3-issue']:
+        dup_cits = get_deduplicated_citations(base)
+        merge_citations(solr, dup_cits, base)
+        print()
+        solr.commit()
 
 
 if __name__ == "__main__":
