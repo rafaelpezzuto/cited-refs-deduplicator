@@ -16,42 +16,32 @@ SOLR_URL = os.environ.get('SOLR_URL', 'http://localhost:8983/solr/articles')
 SOLR_ROWS_LIMIT = 10000
 
 
-def get_ids_for_merging(client: MongoClient):
+def get_ids_for_merging(client: MongoClient, base):
     logging.info('Getting IDs for merging...')
 
-    ids_for_merging = {'book': [],
-                       'chapter': [],
-                       'article-issue': [],
-                       'article-start_page': [],
-                       'article-volume': []}
+    ids_for_merging = []
 
-    for col in ['book',
-                'chapter',
-                'article-issue',
-                'article-start_page',
-                'article-volume']:
+    for j in client[MONGO_DB_DEDUP][MONGO_COLLECTION_DEDUP_PREFIX + '-' + base].find(
+            {'cit_full_ids.1': {'$exists': True}}):
 
-        for j in client[MONGO_DB_DEDUP][MONGO_COLLECTION_DEDUP_PREFIX + '-' + col].find(
-                {'cit_full_ids.1': {'$exists': True}}):
+        item = {
+            '_id': j['_id'],
+            'cit_full_ids': j['cit_full_ids'],
+            'citing_docs': j['citing_docs']
+        }
 
-            item = {
-                '_id': j['_id'],
-                'cit_full_ids': j['cit_full_ids'],
-                'citing_docs': j['citing_docs']
-            }
+        if base == 'article-issue':
+            item.update({'cit_issue': j['cit_keys']['cleaned_issue']})
 
-            if col == 'article-issue':
-                item.update({'cit_issue': j['cit_keys']['cleaned_issue']})
+        if base == 'article-start_page':
+            item.update({'cit_start_page': j['cit_keys']['cleaned_start_page']})
 
-            if col == 'article-start_page':
-                item.update({'cit_start_page': j['cit_keys']['cleaned_start_page']})
+        if base == 'article-volume':
+            item.update({'cit_volume': j['cit_keys']['cleaned_volume']})
 
-            if col == 'article-volume':
-                item.update({'cit_volume': j['cit_keys']['cleaned_volume']})
+        ids_for_merging.append(item)
 
-            ids_for_merging[col].append(item)
-
-        logging.info('%d' % len(ids_for_merging[col]))
+    logging.info('%d' % len(ids_for_merging))
     return ids_for_merging
 
 
@@ -163,24 +153,22 @@ def main():
         help='String de conexao a base Mongo no formato mongodb://[username:password@]host1[:port1][,...hostN[:portN]][/[defaultauthdb][?options]]'
     )
 
+    parser.add_argument(
+        '--base',
+        default=None,
+        dest='base'
+    )
+
     params = parser.parse_args()
 
     logging.basicConfig(filename='merge_solr-' + datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S') + '.log', level=logging.DEBUG)
 
     client = MongoClient(params.mongo_uri)
-    ids_to_merge = get_ids_for_merging(client)
+    ids_to_merge = get_ids_for_merging(client, params.base)
 
     solr = SolrAPI.Solr(SOLR_URL)
 
-    for k, v in ids_to_merge.items():
-        merge_citations(solr, v, k)
-
-
-    # for base in ['dt3-fp', 'dt3-vol', 'dt3-issue']:
-    #     dup_cits = get_deduplicated_citations(base)
-    #     merge_citations(solr, dup_cits, base)
-    #     print()
-    #     solr.commit()
+    merge_citations(solr, ids_to_merge, params.base)
 
 
 if __name__ == "__main__":
