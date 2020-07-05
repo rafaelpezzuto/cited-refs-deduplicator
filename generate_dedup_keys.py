@@ -3,6 +3,7 @@ import os
 import textwrap
 import time
 
+from datetime import datetime
 from hashlib import sha3_224
 from multiprocessing import Pool
 from pymongo import MongoClient, UpdateOne
@@ -177,6 +178,7 @@ def convert_to_mongodoc(data):
 
             mgdocs[cit_hash_mode][cit_sha3_256]['cit_full_ids'].append(cit_full_id)
             mgdocs[cit_hash_mode][cit_sha3_256]['citing_docs'].append(doc_id)
+            mgdocs[cit_hash_mode][cit_sha3_256]['update_date'] = datetime.now().strftime('%Y-%m-%d')
 
     return mgdocs
 
@@ -263,7 +265,7 @@ for slice_start in chunks:
         slice_end = total_docs
 
     print('\t%d to %d' % (slice_start, slice_end))
-    with Pool(4) as p:
+    with Pool(os.cpu_count()) as p:
         results = p.map(parallel_extract_citations_ids_keys, docs_ids[slice_start:slice_end])
 
     save_data_to_mongo(results)
