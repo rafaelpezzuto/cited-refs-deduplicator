@@ -61,6 +61,19 @@ def remove_double_spaces(text):
     return text.strip()
 
 
+def preprocess_default(text):
+    """
+    Aplica:
+        1. Remoçao de acentos
+        2. Manutençao d alpha e espaco
+        3. Remoçao de espaços duplos
+    Procedimento que faz tratamento padrao de limpeza
+    :param text: string a ser tratada
+    :return: string tratada
+    """
+    return remove_double_spaces(alpha_num_space((remove_accents(text))))
+
+
 def preprocess_author_name(text):
     """
     Procedimento que trata nome de autor.
@@ -118,4 +131,4 @@ def preprocess_journal_title(text, use_remove_invalid_chars=False):
     # Remove palavras especiais
     for sw in special_words:
         text = text.replace(sw, '')
-    return remove_double_spaces(alpha_num_space(remove_accents(text), include_special_chars=True)).upper()
+    return remove_double_spaces(alpha_num_space(remove_accents(text), include_special_chars=True)).lower()
