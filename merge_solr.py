@@ -13,7 +13,12 @@ MONGO_DB_DEDUP = os.environ.get('MONGO_DEDUP_DB', 'citations')
 MONGO_ARTICLES_ISSUES_DB = os.environ.get('MONGO_ARTICLES_ISSUES_DB', 'ami')
 MONGO_ARTICLES_ISSUES_COLLECTION = os.environ.get('MONGO_ARTICLES_ISSUES_COLLECTION', 'articles-issues')
 SOLR_URL = os.environ.get('SOLR_URL', 'http://localhost:8983/solr/articles')
-SOLR_ROWS_LIMIT = 10000
+SOLR_ROWS_LIMIT = 2000
+
+
+def dump_deduping_data(data, filename, base):
+    with open(base + '-' + filename + '-' + datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S') + '.json', 'w') as f:
+        f.write(data)
 
 
 def get_ids_for_merging(client: MongoClient, base):
@@ -21,8 +26,7 @@ def get_ids_for_merging(client: MongoClient, base):
 
     ids_for_merging = []
 
-    for j in client[MONGO_DB_DEDUP][MONGO_COLLECTION_DEDUP_PREFIX + '-' + base].find(
-            {'cit_full_ids.1': {'$exists': True}}):
+    for j in client[MONGO_DB_DEDUP][MONGO_COLLECTION_DEDUP_PREFIX + '-' + base].find({'cit_full_ids.1': {'$exists': True}}):
 
         item = {
             '_id': j['_id'],
@@ -48,6 +52,10 @@ def get_ids_for_merging(client: MongoClient, base):
 def merge_citations(solr, deduplicated_citations, base):
     logging.info('Merging Solr documents...')
     counter = 1
+
+    cits_for_merging = []
+    docs_for_updating = []
+    cits_for_removing = set()
 
     for dc in deduplicated_citations:
         print('\r%d' % counter, end='')
@@ -98,27 +106,20 @@ def merge_citations(solr, deduplicated_citations, base):
                     merged_citation['document_fk_ta'].extend(d['document_fk_ta'])
                     merged_citation['document_fk_ta'] = list(set(merged_citation['document_fk_ta']))
 
-                ids_to_remove.add(d['id'])
+                ids_to_remove.add(raw_d['id'])
 
             if merged_citation:
                 logging.debug('Adding id %s' % merged_citation['id'])
-                solr_doc = {
-                    'add': {
-                        'doc': merged_citation,
-                    }
-                }
-                logging.debug('Adding id %s' % merged_citation['id'])
-                solr.update(str(solr_doc).encode('utf-8'), {'content-type': 'application/json'})
+                cits_for_merging.append(merged_citation)
 
             for i in ids_to_remove:
                 logging.debug('Removing id %s' % i)
-                solr.delete('id:{}'.format(i))
+                cits_for_removing.add(i)
 
             query = 'id:(%s)' % ' OR '.join(citing_docs)
             response = solr.select({'q': query})
             dic = eval(response)
 
-            docs_for_updating = []
             for d in dic['response']['docs']:
                 logging.debug('Updating id %s' % d['id'])
                 updated_doc = {}
@@ -126,15 +127,32 @@ def merge_citations(solr, deduplicated_citations, base):
                 updated_doc['id'] = d['id']
                 updated_doc['citation_fk'] = {'remove': list(ids_to_remove), 'add': merged_citation['id']}
 
-                solr_doc = {
-                    'add': {
-                        'doc': updated_doc
-                    }
-                }
+                docs_for_updating.append(updated_doc)
 
-                docs_for_updating.append(str(solr_doc).encode('utf-8'))
+        if len(cits_for_merging) == 1000:
+            dump_deduping_data(str(cits_for_merging), 'cits_for_merging', base)
+            solr.update(str(cits_for_merging).encode('utf-8'), headers={'content-type': 'application/json'})
+            cits_for_merging = []
 
-            solr.update(str(docs_for_updating), headers={'content-type': 'application/json'})
+            dump_deduping_data(str(docs_for_updating), 'docs_for_updating', base)
+            solr.update(str(docs_for_updating).encode('utf-8'), headers={'content-type': 'application/json'})
+            docs_for_updating = []
+
+            dump_deduping_data(str({'delete': {'query': 'id:(' + ' OR '.join(cits_for_removing) + ')'}}), 'cits_for_removing', base)
+            solr.delete('id:(' + ' OR '.join(cits_for_removing) + ')')
+            cits_for_removing = set()
+
+    if len(cits_for_merging) > 0:
+        dump_deduping_data(str(cits_for_merging), 'cits_for_merging', base)
+        solr.update(str(cits_for_merging).encode('utf-8'), headers={'content-type': 'application/json'})
+
+    if len(docs_for_updating) > 0:
+        dump_deduping_data(str(docs_for_updating), 'docs_for_updating', base)
+        solr.update(str(docs_for_updating).encode('utf-8'), headers={'content-type': 'application/json'})
+
+    if len(cits_for_removing) > 0:
+        dump_deduping_data(str({'delete': {'query': 'id:(' + ' OR '.join(cits_for_removing) + ')'}}), 'cits_for_removing', base)
+        solr.delete('id:(' + ' OR '.join(cits_for_removing) + ')')
 
     solr.commit()
 
@@ -166,7 +184,7 @@ def main():
     client = MongoClient(params.mongo_uri)
     ids_to_merge = get_ids_for_merging(client, params.base)
 
-    solr = SolrAPI.Solr(SOLR_URL)
+    solr = SolrAPI.Solr(SOLR_URL, timeout=100)
 
     merge_citations(solr, ids_to_merge, params.base)
 
